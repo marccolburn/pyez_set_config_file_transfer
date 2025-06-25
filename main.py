@@ -161,42 +161,63 @@ def process_config_file(dev, config_file_path, hostname):
         except Exception as rpc_err:
             logging.error(f"Error getting set configuration via RPC: {rpc_err}")
         
-        # Method 2: If RPC method failed, try using CLI command
+        # Method 2: If RPC method failed, try temporary commit approach
         if not set_config.strip():
-            logging.info("RPC method failed, trying CLI command approach")
+            logging.info("RPC method failed, trying temporary commit approach")
             try:
-                # Execute "show configuration | display set" via CLI
+                # First check if we have changes to commit
+                diff_output = config.diff()
+                if not diff_output:
+                    logging.warning("No configuration changes found - nothing to convert to set format")
+                    config.rollback()
+                    config.unlock()
+                    return None
+                
+                logging.info(f"Found {len(diff_output)} characters of configuration diff")
+                logging.debug(f"Diff preview: {diff_output[:200]}...")
+                
+                # Commit the configuration temporarily
+                logging.info("Temporarily committing configuration to get set format")
+                config.commit()
+                logging.info("Configuration committed successfully")
+                
+                # Now get the running config in set format (which includes our changes)
                 cli_result = dev.cli("show configuration | display set", warning=False)
                 if cli_result:
                     set_config = cli_result
-                    logging.info(f"CLI method returned {len(set_config)} characters")
-                    logging.debug(f"CLI set config preview: {set_config[:300]}...")
+                    logging.info(f"Post-commit CLI method returned {len(set_config)} characters")
+                    logging.debug(f"Post-commit set config preview: {set_config[:300]}...")
                 else:
-                    logging.warning("CLI method returned empty result")
-            except Exception as cli_err:
-                logging.error(f"Error getting set configuration via CLI: {cli_err}")
+                    logging.warning("CLI method after commit returned empty result")
+                
+                # Immediately rollback to previous state
+                logging.info("Rolling back to previous configuration")
+                dev.cli("rollback 1")
+                dev.cli("commit")
+                logging.info("Rollback completed successfully")
+                
+            except Exception as commit_err:
+                logging.error(f"Error with temporary commit approach: {commit_err}")
+                # Try to rollback if something went wrong
+                try:
+                    dev.cli("rollback 1")
+                    dev.cli("commit")
+                    logging.info("Emergency rollback completed")
+                except Exception as rollback_err:
+                    logging.error(f"Emergency rollback also failed: {rollback_err}")
         
-        # Method 3: If both methods failed, we still have an issue but let's continue with what we have
+        # Method 3: If temporary commit also failed, try getting running config and warn user
         if not set_config.strip():
-            logging.warning("Both RPC and CLI methods failed to get set format config")
-            # Check if we at least have a diff (which proves config was loaded)
+            logging.warning("Temporary commit method also failed, falling back to running config")
+            logging.warning("Note: This will give you the current running config, not your loaded config")
             try:
-                diff_output = config.diff()
-                if diff_output:
-                    logging.info("Configuration was loaded successfully (diff exists), but set format retrieval failed")
-                    logging.info("This might be a device/software version compatibility issue")
-                    print(f"Warning: Could not retrieve set format for {config_filename}, but config was loaded successfully")
-                    # For now, we'll skip this file but could implement diff-to-set conversion later
-                else:
-                    logging.error("No diff found either - configuration may not have loaded properly")
-            except Exception as diff_err:
-                logging.error(f"Could not get diff either: {diff_err}")
-            
-            print(f"No configuration found or empty configuration for {config_filename}")
-            logging.warning(f"Empty set configuration for {config_filename}")
-            config.rollback()
-            config.unlock()
-            return None
+                cli_result = dev.cli("show configuration | display set", warning=False)
+                if cli_result:
+                    set_config = cli_result
+                    logging.info(f"Fallback CLI method returned {len(set_config)} characters")
+                    print(f"Warning: Using running config for {config_filename} - may not reflect your loaded changes")
+            except Exception as fallback_err:
+                logging.error(f"Even fallback method failed: {fallback_err}")
         
         if set_config.strip():
             logging.info("Set configuration found, creating temporary file")

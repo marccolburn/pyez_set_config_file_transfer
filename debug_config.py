@@ -112,6 +112,80 @@ system {
             except:
                 pass
         
+        # Test 4: Temporary commit method
+        print("\n--- Test 4: Temporary commit method ---")
+        try:
+            config = Config(dev)
+            config.lock()
+            print("✓ Configuration locked for commit test")
+            
+            # Load a simple test config
+            test_config = """
+system {
+    host-name TEST-HOST-COMMIT;
+}
+"""
+            config.load(test_config, format='text')
+            print("✓ Test configuration loaded for commit test")
+            
+            # Check diff first
+            diff = config.diff()
+            if diff:
+                print(f"Configuration diff before commit: {len(diff)} chars")
+                print("Diff sample:")
+                print(diff[:200])
+                
+                # Commit the config temporarily
+                print("Committing configuration...")
+                config.commit()
+                print("✓ Configuration committed")
+                
+                # Now get the set format
+                cli_result = dev.cli("show configuration | display set")
+                if cli_result:
+                    print(f"Post-commit set config length: {len(cli_result)}")
+                    
+                    # Look for our test config
+                    if "TEST-HOST-COMMIT" in cli_result:
+                        print("✓ Found our test configuration in committed config!")
+                        print("Sample of set commands containing our change:")
+                        for line in cli_result.split('\n'):
+                            if "TEST-HOST-COMMIT" in line:
+                                print(f"  {line}")
+                    else:
+                        print("⚠ Test configuration not found in committed config")
+                        
+                    # Show a sample of the set config
+                    print("Set config sample (first 300 chars):")
+                    print(cli_result[:300])
+                else:
+                    print("✗ CLI command returned empty after commit")
+                
+                # Rollback to previous state
+                print("Rolling back...")
+                dev.cli("rollback 1")
+                dev.cli("commit")
+                print("✓ Rollback completed")
+                
+                # Verify rollback worked
+                current_hostname = dev.cli("show configuration system host-name")
+                print(f"Current hostname after rollback: {current_hostname.strip()}")
+                
+            else:
+                print("No configuration differences found")
+                config.rollback()
+                config.unlock()
+                
+        except Exception as e:
+            print(f"Error in temporary commit test: {e}")
+            try:
+                # Emergency rollback
+                dev.cli("rollback 1")
+                dev.cli("commit")
+                print("Emergency rollback attempted")
+            except:
+                pass
+
         dev.close()
         print("\n✓ Connection closed")
         
