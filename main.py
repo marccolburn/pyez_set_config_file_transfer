@@ -4,6 +4,8 @@ import tempfile
 import glob
 import logging
 import argparse
+import paramiko
+import time
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 from jnpr.junos.utils.scp import SCP
@@ -12,6 +14,130 @@ from jnpr.junos.exception import LockError
 from jnpr.junos.exception import UnlockError
 from jnpr.junos.exception import ConfigLoadError
 from jnpr.junos.exception import CommitError
+
+
+def enable_netconf_ssh(hostname, mgmt_ip, username, password, timeout=30):
+    """
+    Enable NETCONF over SSH on a Juniper device using direct SSH connection.
+    This is needed before PyEZ can connect to devices that don't have NETCONF enabled.
+    
+    Args:
+        hostname (str): Device hostname for logging
+        mgmt_ip (str): Management IP address
+        username (str): SSH username
+        password (str): SSH password
+        timeout (int): Connection timeout in seconds
+        
+    Returns:
+        bool: True if NETCONF was enabled successfully, False otherwise
+    """
+    try:
+        print(f"Enabling NETCONF on {hostname} ({mgmt_ip}) via SSH...")
+        logging.info(f"Attempting to enable NETCONF on {hostname} via SSH")
+        
+        # Create SSH client
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        # Connect via SSH
+        ssh.connect(
+            hostname=mgmt_ip,
+            username=username,
+            password=password,
+            timeout=timeout,
+            look_for_keys=False,
+            allow_agent=False
+        )
+        
+        logging.info(f"SSH connection established to {hostname}")
+        
+        # Create interactive shell
+        shell = ssh.invoke_shell()
+        time.sleep(2)  # Wait for shell to be ready
+        
+        # Send commands to enable NETCONF
+        commands = [
+            "configure",
+            "set system services netconf ssh",
+            "commit",
+            "exit"
+        ]
+        
+        for cmd in commands:
+            logging.debug(f"Sending command to {hostname}: {cmd}")
+            shell.send(cmd + '\n')
+            time.sleep(2)  # Wait for command to execute
+            
+            # Read output
+            if shell.recv_ready():
+                output = shell.recv(4096).decode('utf-8')
+                logging.debug(f"Command output: {output}")
+                
+                # Check for errors
+                if 'error' in output.lower() or 'invalid' in output.lower():
+                    logging.warning(f"Possible error in command output: {output}")
+        
+        # Final read to get any remaining output
+        time.sleep(3)
+        if shell.recv_ready():
+            final_output = shell.recv(4096).decode('utf-8')
+            logging.debug(f"Final output: {final_output}")
+        
+        shell.close()
+        ssh.close()
+        
+        print(f"✓ NETCONF configuration applied to {hostname}")
+        logging.info(f"NETCONF enablement completed for {hostname}")
+        
+        # Wait a bit for NETCONF service to start
+        print(f"Waiting for NETCONF service to start on {hostname}...")
+        time.sleep(5)
+        
+        return True
+        
+    except paramiko.AuthenticationException:
+        print(f"✗ Authentication failed for {hostname}")
+        logging.error(f"SSH authentication failed for {hostname}")
+        return False
+        
+    except paramiko.SSHException as ssh_err:
+        print(f"✗ SSH connection failed for {hostname}: {ssh_err}")
+        logging.error(f"SSH connection error for {hostname}: {ssh_err}")
+        return False
+        
+    except Exception as err:
+        print(f"✗ Error enabling NETCONF on {hostname}: {err}")
+        logging.error(f"Error enabling NETCONF on {hostname}: {err}")
+        return False
+
+
+def check_netconf_connectivity(hostname, mgmt_ip, username, password, timeout=10):
+    """
+    Check if NETCONF is available on a device by attempting a PyEZ connection.
+    
+    Args:
+        hostname (str): Device hostname for logging
+        mgmt_ip (str): Management IP address
+        username (str): Username for authentication
+        password (str): Password for authentication
+        timeout (int): Connection timeout in seconds
+        
+    Returns:
+        bool: True if NETCONF is available, False otherwise
+    """
+    try:
+        logging.info(f"Testing NETCONF connectivity to {hostname}")
+        dev = Device(host=mgmt_ip, user=username, password=password, timeout=timeout)
+        dev.open()
+        dev.close()
+        logging.info(f"NETCONF connectivity confirmed for {hostname}")
+        return True
+    except ConnectError:
+        logging.info(f"NETCONF not available on {hostname}")
+        return False
+    except Exception as err:
+        logging.warning(f"Error testing NETCONF on {hostname}: {err}")
+        return False
 
 
 def convert_junos_text_to_set(config_text):
@@ -316,7 +442,7 @@ def cleanup_remote_file(dev, remote_path, hostname):
         print(f"Warning: Could not cleanup {remote_path} on {hostname}: {err}")
 
 
-def process_device(device_info, config_dir, output_dir, username, password):
+def process_device(device_info, config_dir, output_dir, username, password, enable_netconf=False):
     """
     Process all configuration files for a single device.
     
@@ -326,6 +452,7 @@ def process_device(device_info, config_dir, output_dir, username, password):
         output_dir (str): Directory to save output files
         username (str): Username for device authentication
         password (str): Password for device authentication
+        enable_netconf (bool): Whether to enable NETCONF if not available
     """
     hostname = device_info['hostname']
     mgmt_ip = device_info['mgmt_ip']
@@ -339,6 +466,25 @@ def process_device(device_info, config_dir, output_dir, username, password):
     if not config_files:
         print(f"No configuration files found for {hostname}, skipping...")
         return
+    
+    # Check if NETCONF enablement is requested
+    if enable_netconf:
+        print(f"Checking NETCONF connectivity for {hostname}...")
+        if not check_netconf_connectivity(hostname, mgmt_ip, username, password):
+            print(f"NETCONF not available on {hostname}, attempting to enable...")
+            if not enable_netconf_ssh(hostname, mgmt_ip, username, password):
+                print(f"Failed to enable NETCONF on {hostname}, skipping device...")
+                return
+            
+            # Test connectivity again after enabling
+            print(f"Testing NETCONF connectivity after enablement...")
+            if not check_netconf_connectivity(hostname, mgmt_ip, username, password):
+                print(f"NETCONF still not available on {hostname} after enablement, skipping...")
+                return
+            else:
+                print(f"✓ NETCONF is now available on {hostname}")
+        else:
+            print(f"✓ NETCONF already available on {hostname}")
     
     # Connect to device
     dev = connect_to_device(hostname, mgmt_ip, username, password)
@@ -374,6 +520,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Juniper Configuration Set Format Converter')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--enable-netconf', action='store_true', help='Enable NETCONF on devices if not available')
     parser.add_argument('--username', default='lab', help='Device username (default: lab)')
     parser.add_argument('--password', default='lab123', help='Device password (default: lab123)')
     parser.add_argument('--csv-file', default='devices.csv', help='CSV file with device info (default: devices.csv)')
@@ -410,10 +557,22 @@ def main():
     print(f"Config Directory: {CONFIG_DIR}")
     print(f"Output Directory: {OUTPUT_DIR}")
     print(f"Debug Mode: {'Enabled' if args.debug else 'Disabled'}")
+    print(f"NETCONF Enablement: {'Enabled' if args.enable_netconf else 'Disabled'}")
+    
+    if args.enable_netconf:
+        print("\n⚠️  NETCONF Enablement Warning:")
+        print("This will attempt to enable NETCONF on devices that don't have it.")
+        print("This requires SSH access and will modify device configurations.")
+        print("Press Ctrl+C within 5 seconds to cancel...")
+        try:
+            time.sleep(5)
+        except KeyboardInterrupt:
+            print("\nOperation cancelled by user.")
+            return
     
     logging.info("Script started with the following parameters:")
     logging.info(f"CSV File: {CSV_FILE}, Config Dir: {CONFIG_DIR}, Output Dir: {OUTPUT_DIR}")
-    logging.info(f"Username: {USERNAME}, Debug: {args.debug}")
+    logging.info(f"Username: {USERNAME}, Debug: {args.debug}, Enable NETCONF: {args.enable_netconf}")
     
     # Read device information from CSV
     devices = read_device_csv(CSV_FILE)
@@ -428,7 +587,7 @@ def main():
     # Process each device
     for device_info in devices:
         try:
-            process_device(device_info, CONFIG_DIR, OUTPUT_DIR, USERNAME, PASSWORD)
+            process_device(device_info, CONFIG_DIR, OUTPUT_DIR, USERNAME, PASSWORD, args.enable_netconf)
         except KeyboardInterrupt:
             print("\nScript interrupted by user")
             break

@@ -108,12 +108,13 @@ router3,192.168.1.12
 python main.py [options]
 
 Options:
-  --debug          Enable debug logging (creates detailed pyez_debug.log)
-  --username USER  Device username (default: lab)
-  --password PASS  Device password (default: lab123)
-  --csv-file FILE  CSV file with device info (default: devices.csv)
-  --config-dir DIR Config directory (default: configs)
-  --output-dir DIR Output directory (default: output)
+  --debug              Enable debug logging (creates detailed pyez_debug.log)
+  --enable-netconf     Enable NETCONF on devices if not available (requires SSH access)
+  --username USER      Device username (default: lab)
+  --password PASS      Device password (default: lab123)
+  --csv-file FILE      CSV file with device info (default: devices.csv)
+  --config-dir DIR     Config directory (default: configs)
+  --output-dir DIR     Output directory (default: output)
 ```
 
 ### Examples
@@ -125,12 +126,39 @@ python main.py
 # With debug logging
 python main.py --debug
 
-# With custom credentials
-python main.py --username admin --password mypassword
+# Enable NETCONF on devices that don't have it
+python main.py --enable-netconf
+
+# With custom credentials and NETCONF enablement
+python main.py --username admin --password mypassword --enable-netconf
 
 # Custom file locations
 python main.py --csv-file my_devices.csv --config-dir my_configs
 ```
+
+### NETCONF Enablement
+
+Some Juniper devices don't have NETCONF enabled by default, which PyEZ requires. Use the `--enable-netconf` flag to automatically enable it:
+
+```bash
+python main.py --enable-netconf
+```
+
+This feature:
+- First checks if NETCONF is available via a quick PyEZ connection test
+- If not available, connects via SSH and runs configuration commands to enable NETCONF
+- Waits for the service to start and verifies connectivity
+- Only processes devices where NETCONF is successfully enabled
+
+**Requirements for NETCONF enablement:**
+- SSH access to the devices
+- Same credentials work for both SSH and NETCONF
+- Administrative privileges to modify system services
+
+**Safety features:**
+- 5-second countdown with cancellation option when NETCONF enablement is requested
+- Skips devices where NETCONF enablement fails
+- Comprehensive logging of all NETCONF enablement attempts
 
 ### Debugging
 
