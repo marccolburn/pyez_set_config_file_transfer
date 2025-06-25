@@ -14,96 +14,51 @@ from jnpr.junos.exception import ConfigLoadError
 from jnpr.junos.exception import CommitError
 
 
-def convert_diff_to_set_commands(diff_output):
+def convert_junos_text_to_set(config_text):
     """
-    Convert Junos configuration diff output to set commands.
-    
-    Args:
-        diff_output (str): The diff output from config.diff()
-        
-    Returns:
-        str: Set commands representing the changes
+    Convert Junos text configuration to set commands.
+    Handles hierarchical structure properly.
     """
-    if not diff_output:
-        return ""
-    
     set_commands = []
-    current_path = []
+    lines = config_text.strip().split('\n')
+    path_stack = []
     
-    for line in diff_output.split('\n'):
-        line = line.strip()
-        if not line:
+    for line in lines:
+        line = line.rstrip()
+        
+        # Skip empty lines and comments
+        if not line or line.strip().startswith('#'):
             continue
-            
-        # Handle [edit ...] lines to track hierarchy
-        if line.startswith('[edit'):
-            # Extract the path from [edit path]
-            path_match = line[5:-1]  # Remove [edit and ]
-            if path_match:
-                current_path = path_match.split()
-            else:
-                current_path = []
         
-        # Handle additions (+ lines)
-        elif line.startswith('+'):
-            config_line = line[1:].strip()
-            if config_line and not config_line.startswith('['):
-                # Parse the configuration line
-                set_cmd = build_set_command(current_path, config_line)
-                if set_cmd:
-                    set_commands.append(set_cmd)
-    
-    return '\n'.join(set_commands)
-
-def build_set_command(path, config_line):
-    """
-    Build a set command from a hierarchical path and config line.
-    
-    Args:
-        path (list): Current hierarchy path
-        config_line (str): Configuration line from diff
+        # Calculate indentation level (assuming 4 spaces per level)
+        indent = len(line) - len(line.lstrip())
+        level = indent // 4
         
-    Returns:
-        str: Set command
-    """
-    # Remove trailing semicolon and clean up
-    config_line = config_line.rstrip(';').strip()
-    
-    if not config_line:
-        return None
-    
-    # Handle different types of configuration lines
-    if '{' in config_line:
-        # This is a hierarchy opening, extract the key
-        key = config_line.split('{')[0].strip()
-        full_path = path + [key]
-        return f"set {' '.join(full_path)}"
-    
-    elif '=' in config_line:
-        # This might be an assignment (rare in Junos)
-        parts = config_line.split('=', 1)
-        key = parts[0].strip()
-        value = parts[1].strip().strip('"')
-        full_path = path + [key]
-        return f"set {' '.join(full_path)} {value}"
+        # Adjust path stack to current level
+        while len(path_stack) > level:
+            path_stack.pop()
         
-    else:
-        # Regular configuration line
-        parts = config_line.split()
-        if parts:
-            # Check if this is a leaf with a value
-            if len(parts) > 1:
-                # Multi-word configuration
-                key = parts[0]
-                value = ' '.join(parts[1:])
-                full_path = path + [key]
-                return f"set {' '.join(full_path)} {value}"
-            else:
-                # Single word configuration
-                full_path = path + parts
-                return f"set {' '.join(full_path)}"
+        content = line.strip()
+        
+        if content.endswith('{'):
+            # Start of a configuration block
+            block_name = content[:-1].strip()
+            path_stack.append(block_name)
+        elif content == '}':
+            # End of block - already handled by indentation
+            continue
+        elif content.endswith(';'):
+            # Configuration statement
+            statement = content[:-1].strip()
+            full_path = ' '.join(path_stack + [statement])
+            set_commands.append(f"set {full_path}")
+        elif content and not content.startswith('#'):
+            # Handle any other content
+            full_path = ' '.join(path_stack + [content])
+            if not full_path.endswith('{') and not full_path.endswith('}'):
+                set_commands.append(f"set {full_path}")
     
-    return None
+    return set_commands
 
 
 def read_device_csv(csv_file):
@@ -234,36 +189,26 @@ def process_config_file(dev, config_file_path, hostname):
         except Exception as diff_err:
             logging.warning(f"Could not get diff: {diff_err}")
         
-        # Save candidate configuration in set format
-        print(f"Saving candidate config in set format to {remote_set_path}")
-        logging.info("Converting configuration diff to set commands")
+        # Convert the configuration file directly to set format
+        print(f"Converting {config_filename} to set format")
+        logging.info("Converting configuration file directly to set commands")
         
-        # Get the diff which shows our loaded changes
+        # Use our reliable text-to-set converter
         try:
-            diff_output = config.diff()
-            if not diff_output:
-                logging.warning("No configuration changes found - nothing to convert to set format")
-                config.rollback()
-                config.unlock()
-                return None
+            set_commands = convert_junos_text_to_set(config_content)
             
-            logging.info(f"Found {len(diff_output)} characters of configuration diff")
-            logging.debug(f"Diff content: {diff_output}")
-            
-            # Convert diff to set commands
-            set_config = convert_diff_to_set_commands(diff_output)
-            
-            if set_config.strip():
-                logging.info(f"Successfully converted diff to {len(set_config)} characters of set commands")
+            if set_commands:
+                set_config = '\n'.join(set_commands)
+                logging.info(f"Successfully converted config to {len(set_commands)} set commands")
                 logging.debug(f"Set commands preview: {set_config[:300]}...")
             else:
-                logging.warning("Diff conversion resulted in empty set commands")
+                logging.warning("Config conversion resulted in no set commands")
                 config.rollback()
                 config.unlock()
                 return None
                 
-        except Exception as diff_err:
-            logging.error(f"Error getting or converting diff: {diff_err}")
+        except Exception as convert_err:
+            logging.error(f"Error converting config to set format: {convert_err}")
             config.rollback()
             config.unlock()
             return None
