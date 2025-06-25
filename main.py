@@ -146,7 +146,8 @@ def process_config_file(dev, config_file_path, hostname):
         print(f"Saving candidate config in set format to {remote_set_path}")
         logging.info("Attempting to get candidate configuration in set format")
         
-        # Execute "show configuration | display set" to get candidate config in set format
+        # Method 1: Try get_config with format='set'
+        set_config = ""
         try:
             set_config_rpc = dev.rpc.get_config(format='set')
             logging.info(f"RPC response type: {type(set_config_rpc)}")
@@ -154,17 +155,45 @@ def process_config_file(dev, config_file_path, hostname):
             if hasattr(set_config_rpc, 'text'):
                 set_config = set_config_rpc.text if set_config_rpc.text else ""
                 logging.info(f"Set config text length: {len(set_config)}")
-                if set_config:
-                    logging.debug(f"Set config preview: {set_config[:300]}...")
-                else:
-                    logging.warning("Set config text is empty")
             else:
                 logging.error("RPC response does not have 'text' attribute")
-                logging.info(f"RPC response attributes: {dir(set_config_rpc)}")
-                set_config = ""
                 
         except Exception as rpc_err:
-            logging.error(f"Error getting set configuration: {rpc_err}")
+            logging.error(f"Error getting set configuration via RPC: {rpc_err}")
+        
+        # Method 2: If RPC method failed, try using CLI command
+        if not set_config.strip():
+            logging.info("RPC method failed, trying CLI command approach")
+            try:
+                # Execute "show configuration | display set" via CLI
+                cli_result = dev.cli("show configuration | display set", warning=False)
+                if cli_result:
+                    set_config = cli_result
+                    logging.info(f"CLI method returned {len(set_config)} characters")
+                    logging.debug(f"CLI set config preview: {set_config[:300]}...")
+                else:
+                    logging.warning("CLI method returned empty result")
+            except Exception as cli_err:
+                logging.error(f"Error getting set configuration via CLI: {cli_err}")
+        
+        # Method 3: If both methods failed, we still have an issue but let's continue with what we have
+        if not set_config.strip():
+            logging.warning("Both RPC and CLI methods failed to get set format config")
+            # Check if we at least have a diff (which proves config was loaded)
+            try:
+                diff_output = config.diff()
+                if diff_output:
+                    logging.info("Configuration was loaded successfully (diff exists), but set format retrieval failed")
+                    logging.info("This might be a device/software version compatibility issue")
+                    print(f"Warning: Could not retrieve set format for {config_filename}, but config was loaded successfully")
+                    # For now, we'll skip this file but could implement diff-to-set conversion later
+                else:
+                    logging.error("No diff found either - configuration may not have loaded properly")
+            except Exception as diff_err:
+                logging.error(f"Could not get diff either: {diff_err}")
+            
+            print(f"No configuration found or empty configuration for {config_filename}")
+            logging.warning(f"Empty set configuration for {config_filename}")
             config.rollback()
             config.unlock()
             return None

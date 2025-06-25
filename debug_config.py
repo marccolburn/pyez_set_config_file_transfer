@@ -61,27 +61,39 @@ system {
             config.load(test_config, format='text')
             print("✓ Test configuration loaded")
             
-            # Try to get candidate config in set format
+            # Try to get candidate config in set format via RPC
             candidate_set_rpc = dev.rpc.get_config(format='set')
             candidate_set = candidate_set_rpc.text if candidate_set_rpc.text else ""
-            print(f"Candidate config set format length: {len(candidate_set)}")
+            print(f"Candidate config set format (RPC) length: {len(candidate_set)}")
             
             if candidate_set:
                 print("Candidate config sample (first 300 chars):")
                 print(candidate_set[:300])
-                
-                # Look for our test config
-                if "TEST-HOST" in candidate_set:
-                    print("✓ Found our test configuration in candidate!")
-                else:
-                    print("⚠ Test configuration not found in candidate")
             else:
-                print("✗ Candidate config is empty!")
+                print("✗ RPC method returned empty candidate config")
+                
+                # Try CLI method instead
+                print("\n--- Test 4: CLI method for set format ---")
+                try:
+                    cli_result = dev.cli("show configuration | display set", warning=False)
+                    print(f"CLI method returned {len(cli_result)} characters")
+                    if cli_result:
+                        print("CLI set format sample (first 300 chars):")
+                        print(cli_result[:300])
+                        
+                        if "TEST-HOST" in cli_result:
+                            print("✓ Found our test configuration via CLI!")
+                        else:
+                            print("⚠ Test configuration not found in CLI output")
+                    else:
+                        print("✗ CLI method also returned empty")
+                except Exception as cli_err:
+                    print(f"CLI method error: {cli_err}")
                 
             # Check diff
             diff = config.diff()
             if diff:
-                print(f"Configuration diff length: {len(diff)}")
+                print(f"\nConfiguration diff length: {len(diff)}")
                 print("Diff sample:")
                 print(diff[:200])
             else:
