@@ -118,9 +118,9 @@ def process_config_file(dev, config_file_path, hostname):
         
         # Execute "show configuration | display set" to get candidate config in set format
         set_config_rpc = dev.rpc.get_config(format='set')
-        set_config = set_config_rpc.text
+        set_config = set_config_rpc.text if set_config_rpc.text else ""
         
-        if set_config and set_config.strip():
+        if set_config.strip():
             # Create a temporary local file with set format config
             with tempfile.NamedTemporaryFile(mode='w', suffix='.set', delete=False) as temp_file:
                 temp_file.write(set_config)
@@ -133,7 +133,7 @@ def process_config_file(dev, config_file_path, hostname):
             # Clean up local temp file
             os.remove(temp_local_path)
         else:
-            print(f"No configuration found for {config_filename}")
+            print(f"No configuration found or empty configuration for {config_filename}")
             config.rollback()
             config.unlock()
             return None
