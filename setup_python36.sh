@@ -14,7 +14,7 @@ fi
 
 # Create fresh virtual environment
 echo "Creating new virtual environment..."
-python3 -m venv venv
+python3.6 -m venv venv
 
 # Activate virtual environment
 echo "Activating virtual environment..."
