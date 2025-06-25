@@ -18,7 +18,7 @@ This script connects to Juniper devices, loads configuration files, saves them i
 
 If you're running Python 3.6 on CentOS 7, you'll need to use specific package versions to avoid compatibility issues:
 
-#### Option 1: Automatic Setup (Recommended)
+#### Option 1: Automated Setup (Recommended)
 ```bash
 chmod +x setup_python36.sh
 ./setup_python36.sh
@@ -144,9 +144,10 @@ The script includes comprehensive error handling for:
 If you encounter errors like:
 ```
 AttributeError: module 'typing' has no attribute 'NoReturn'
+ImportError: cannot import name 'NoReturn'
 ```
 
-This indicates that newer versions of cryptography/PyEZ are being installed that require Python 3.7+. Use the provided `setup_python36.sh` script or manually install the pinned versions in `requirements.txt`.
+These indicate that newer versions of cryptographic libraries (cryptography, PyNaCl, etc.) are being installed that require Python 3.7+. The setup script addresses these issues by installing compatible versions in the correct order.
 
 ### Common Solutions:
 
@@ -170,8 +171,10 @@ This indicates that newer versions of cryptography/PyEZ are being installed that
 
 ### Expected Compatible Versions for Python 3.6:
 - cryptography==3.4.8
+- PyNaCl==1.4.0
 - junos-eznc==2.6.3
 - paramiko==2.11.0
+- bcrypt==3.2.2
 - lxml==4.6.5
 - ncclient==0.6.13
 

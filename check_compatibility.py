@@ -35,6 +35,9 @@ def install_compatible_packages():
         print("Installing Python 3.6 compatible packages...")
         packages = [
             "cryptography==3.4.8",
+            "PyNaCl==1.4.0",
+            "bcrypt==3.2.2",
+            "cffi==1.14.6",
             "paramiko==2.11.0", 
             "lxml==4.6.5",
             "ncclient==0.6.13",
