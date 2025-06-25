@@ -2,6 +2,8 @@ import csv
 import os
 import tempfile
 import glob
+import logging
+import argparse
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 from jnpr.junos.utils.scp import SCP
@@ -104,44 +106,99 @@ def process_config_file(dev, config_file_path, hostname):
     
     try:
         print(f"Processing {config_filename} on {hostname}...")
+        logging.info(f"Starting to process {config_filename} on {hostname}")
+        
+        # Check if config file exists and is readable
+        if not os.path.exists(config_file_path):
+            logging.error(f"Config file does not exist: {config_file_path}")
+            return None
+            
+        with open(config_file_path, 'r') as f:
+            config_content = f.read()
+            logging.info(f"Config file size: {len(config_content)} characters")
+            logging.debug(f"Config content preview: {config_content[:200]}...")
         
         # Initialize config utility
         config = Config(dev)
+        logging.info(f"Attempting to lock configuration on {hostname}")
         config.lock()
+        logging.info(f"Configuration locked successfully on {hostname}")
         
         # Load configuration from file
         print(f"Loading configuration from {config_file_path}")
+        logging.info(f"Loading configuration from {config_file_path}")
         config.load(path=str(config_file_path), format='text')
+        logging.info(f"Configuration loaded successfully from {config_file_path}")
+        
+        # Check if there are any pending changes
+        logging.info("Checking for configuration differences...")
+        try:
+            diff_output = config.diff()
+            if diff_output:
+                logging.info(f"Configuration diff found: {len(diff_output)} characters")
+                logging.debug(f"Diff preview: {diff_output[:300]}...")
+            else:
+                logging.warning("No configuration differences found after loading")
+        except Exception as diff_err:
+            logging.warning(f"Could not get diff: {diff_err}")
         
         # Save candidate configuration in set format
         print(f"Saving candidate config in set format to {remote_set_path}")
+        logging.info("Attempting to get candidate configuration in set format")
         
         # Execute "show configuration | display set" to get candidate config in set format
-        set_config_rpc = dev.rpc.get_config(format='set')
-        set_config = set_config_rpc.text if set_config_rpc.text else ""
+        try:
+            set_config_rpc = dev.rpc.get_config(format='set')
+            logging.info(f"RPC response type: {type(set_config_rpc)}")
+            
+            if hasattr(set_config_rpc, 'text'):
+                set_config = set_config_rpc.text if set_config_rpc.text else ""
+                logging.info(f"Set config text length: {len(set_config)}")
+                if set_config:
+                    logging.debug(f"Set config preview: {set_config[:300]}...")
+                else:
+                    logging.warning("Set config text is empty")
+            else:
+                logging.error("RPC response does not have 'text' attribute")
+                logging.info(f"RPC response attributes: {dir(set_config_rpc)}")
+                set_config = ""
+                
+        except Exception as rpc_err:
+            logging.error(f"Error getting set configuration: {rpc_err}")
+            config.rollback()
+            config.unlock()
+            return None
         
         if set_config.strip():
+            logging.info("Set configuration found, creating temporary file")
             # Create a temporary local file with set format config
             with tempfile.NamedTemporaryFile(mode='w', suffix='.set', delete=False) as temp_file:
                 temp_file.write(set_config)
                 temp_local_path = temp_file.name
             
+            logging.info(f"Temporary file created: {temp_local_path}")
+            
             # Copy to device using SCP
+            logging.info(f"Copying set config to device at {remote_set_path}")
             with SCP(dev) as scp:
                 scp.put(temp_local_path, remote_set_path)
             
             # Clean up local temp file
             os.remove(temp_local_path)
+            logging.info("Temporary local file cleaned up")
         else:
             print(f"No configuration found or empty configuration for {config_filename}")
+            logging.warning(f"Empty set configuration for {config_filename}")
             config.rollback()
             config.unlock()
             return None
         
         # Rollback the pending changes
         print(f"Rolling back changes on {hostname}")
+        logging.info(f"Rolling back configuration changes on {hostname}")
         config.rollback()
         config.unlock()
+        logging.info(f"Configuration unlocked on {hostname}")
         
         return remote_set_path
         
@@ -270,17 +327,49 @@ def main():
     """
     Main function to orchestrate the configuration processing workflow.
     """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Juniper Configuration Set Format Converter')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--username', default='lab', help='Device username (default: lab)')
+    parser.add_argument('--password', default='lab123', help='Device password (default: lab123)')
+    parser.add_argument('--csv-file', default='devices.csv', help='CSV file with device info (default: devices.csv)')
+    parser.add_argument('--config-dir', default='configs', help='Config directory (default: configs)')
+    parser.add_argument('--output-dir', default='output', help='Output directory (default: output)')
+    
+    args = parser.parse_args()
+    
+    # Configure logging based on arguments
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    
+    # Reconfigure logging
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('pyez_debug.log'),
+            logging.StreamHandler()
+        ]
+    )
+    
     # Configuration parameters
-    CSV_FILE = 'devices.csv'  # CSV file with hostname, mgmt_ip columns
-    CONFIG_DIR = 'configs'    # Directory containing subdirectories for each hostname
-    OUTPUT_DIR = 'output'     # Directory to save set format files
-    USERNAME = 'lab'        # Device username
-    PASSWORD = 'lab123'     # Device password
+    CSV_FILE = args.csv_file
+    CONFIG_DIR = args.config_dir
+    OUTPUT_DIR = args.output_dir
+    USERNAME = args.username
+    PASSWORD = args.password
     
     print("Starting Juniper Configuration Processing Script")
     print(f"CSV File: {CSV_FILE}")
     print(f"Config Directory: {CONFIG_DIR}")
     print(f"Output Directory: {OUTPUT_DIR}")
+    print(f"Debug Mode: {'Enabled' if args.debug else 'Disabled'}")
+    
+    logging.info("Script started with the following parameters:")
+    logging.info(f"CSV File: {CSV_FILE}, Config Dir: {CONFIG_DIR}, Output Dir: {OUTPUT_DIR}")
+    logging.info(f"Username: {USERNAME}, Debug: {args.debug}")
     
     # Read device information from CSV
     devices = read_device_csv(CSV_FILE)

@@ -97,11 +97,54 @@ router3,192.168.1.12
 1. Update the `devices.csv` file with your router information
 2. Create directories under `configs/` for each hostname
 3. Place your Juniper configuration files (*.config) in the respective hostname directories
-4. Update the credentials in the script
-5. Run the script:
+4. Run the script:
    ```bash
    python main.py
    ```
+
+### Command Line Options
+
+```bash
+python main.py [options]
+
+Options:
+  --debug          Enable debug logging (creates detailed pyez_debug.log)
+  --username USER  Device username (default: lab)
+  --password PASS  Device password (default: lab123)
+  --csv-file FILE  CSV file with device info (default: devices.csv)
+  --config-dir DIR Config directory (default: configs)
+  --output-dir DIR Output directory (default: output)
+```
+
+### Examples
+
+```bash
+# Basic usage
+python main.py
+
+# With debug logging
+python main.py --debug
+
+# With custom credentials
+python main.py --username admin --password mypassword
+
+# Custom file locations
+python main.py --csv-file my_devices.csv --config-dir my_configs
+```
+
+### Debugging
+
+If you encounter issues, enable debug mode:
+```bash
+python main.py --debug
+```
+
+This will create a detailed `pyez_debug.log` file and show additional information on screen.
+
+You can also run the debug test script to troubleshoot connection and configuration issues:
+```bash
+python debug_config.py
+```
 
 ## Output
 
