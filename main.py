@@ -14,6 +14,98 @@ from jnpr.junos.exception import ConfigLoadError
 from jnpr.junos.exception import CommitError
 
 
+def convert_diff_to_set_commands(diff_output):
+    """
+    Convert Junos configuration diff output to set commands.
+    
+    Args:
+        diff_output (str): The diff output from config.diff()
+        
+    Returns:
+        str: Set commands representing the changes
+    """
+    if not diff_output:
+        return ""
+    
+    set_commands = []
+    current_path = []
+    
+    for line in diff_output.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Handle [edit ...] lines to track hierarchy
+        if line.startswith('[edit'):
+            # Extract the path from [edit path]
+            path_match = line[5:-1]  # Remove [edit and ]
+            if path_match:
+                current_path = path_match.split()
+            else:
+                current_path = []
+        
+        # Handle additions (+ lines)
+        elif line.startswith('+'):
+            config_line = line[1:].strip()
+            if config_line and not config_line.startswith('['):
+                # Parse the configuration line
+                set_cmd = build_set_command(current_path, config_line)
+                if set_cmd:
+                    set_commands.append(set_cmd)
+    
+    return '\n'.join(set_commands)
+
+def build_set_command(path, config_line):
+    """
+    Build a set command from a hierarchical path and config line.
+    
+    Args:
+        path (list): Current hierarchy path
+        config_line (str): Configuration line from diff
+        
+    Returns:
+        str: Set command
+    """
+    # Remove trailing semicolon and clean up
+    config_line = config_line.rstrip(';').strip()
+    
+    if not config_line:
+        return None
+    
+    # Handle different types of configuration lines
+    if '{' in config_line:
+        # This is a hierarchy opening, extract the key
+        key = config_line.split('{')[0].strip()
+        full_path = path + [key]
+        return f"set {' '.join(full_path)}"
+    
+    elif '=' in config_line:
+        # This might be an assignment (rare in Junos)
+        parts = config_line.split('=', 1)
+        key = parts[0].strip()
+        value = parts[1].strip().strip('"')
+        full_path = path + [key]
+        return f"set {' '.join(full_path)} {value}"
+        
+    else:
+        # Regular configuration line
+        parts = config_line.split()
+        if parts:
+            # Check if this is a leaf with a value
+            if len(parts) > 1:
+                # Multi-word configuration
+                key = parts[0]
+                value = ' '.join(parts[1:])
+                full_path = path + [key]
+                return f"set {' '.join(full_path)} {value}"
+            else:
+                # Single word configuration
+                full_path = path + parts
+                return f"set {' '.join(full_path)}"
+    
+    return None
+
+
 def read_device_csv(csv_file):
     """
     Read CSV file containing hostname and management IP addresses.
@@ -144,80 +236,37 @@ def process_config_file(dev, config_file_path, hostname):
         
         # Save candidate configuration in set format
         print(f"Saving candidate config in set format to {remote_set_path}")
-        logging.info("Attempting to get candidate configuration in set format")
+        logging.info("Converting configuration diff to set commands")
         
-        # Method 1: Try get_config with format='set'
-        set_config = ""
+        # Get the diff which shows our loaded changes
         try:
-            set_config_rpc = dev.rpc.get_config(format='set')
-            logging.info(f"RPC response type: {type(set_config_rpc)}")
+            diff_output = config.diff()
+            if not diff_output:
+                logging.warning("No configuration changes found - nothing to convert to set format")
+                config.rollback()
+                config.unlock()
+                return None
             
-            if hasattr(set_config_rpc, 'text'):
-                set_config = set_config_rpc.text if set_config_rpc.text else ""
-                logging.info(f"Set config text length: {len(set_config)}")
+            logging.info(f"Found {len(diff_output)} characters of configuration diff")
+            logging.debug(f"Diff content: {diff_output}")
+            
+            # Convert diff to set commands
+            set_config = convert_diff_to_set_commands(diff_output)
+            
+            if set_config.strip():
+                logging.info(f"Successfully converted diff to {len(set_config)} characters of set commands")
+                logging.debug(f"Set commands preview: {set_config[:300]}...")
             else:
-                logging.error("RPC response does not have 'text' attribute")
+                logging.warning("Diff conversion resulted in empty set commands")
+                config.rollback()
+                config.unlock()
+                return None
                 
-        except Exception as rpc_err:
-            logging.error(f"Error getting set configuration via RPC: {rpc_err}")
-        
-        # Method 2: If RPC method failed, try temporary commit approach
-        if not set_config.strip():
-            logging.info("RPC method failed, trying temporary commit approach")
-            try:
-                # First check if we have changes to commit
-                diff_output = config.diff()
-                if not diff_output:
-                    logging.warning("No configuration changes found - nothing to convert to set format")
-                    config.rollback()
-                    config.unlock()
-                    return None
-                
-                logging.info(f"Found {len(diff_output)} characters of configuration diff")
-                logging.debug(f"Diff preview: {diff_output[:200]}...")
-                
-                # Commit the configuration temporarily
-                logging.info("Temporarily committing configuration to get set format")
-                config.commit()
-                logging.info("Configuration committed successfully")
-                
-                # Now get the running config in set format (which includes our changes)
-                cli_result = dev.cli("show configuration | display set", warning=False)
-                if cli_result:
-                    set_config = cli_result
-                    logging.info(f"Post-commit CLI method returned {len(set_config)} characters")
-                    logging.debug(f"Post-commit set config preview: {set_config[:300]}...")
-                else:
-                    logging.warning("CLI method after commit returned empty result")
-                
-                # Immediately rollback to previous state
-                logging.info("Rolling back to previous configuration")
-                dev.cli("rollback 1")
-                dev.cli("commit")
-                logging.info("Rollback completed successfully")
-                
-            except Exception as commit_err:
-                logging.error(f"Error with temporary commit approach: {commit_err}")
-                # Try to rollback if something went wrong
-                try:
-                    dev.cli("rollback 1")
-                    dev.cli("commit")
-                    logging.info("Emergency rollback completed")
-                except Exception as rollback_err:
-                    logging.error(f"Emergency rollback also failed: {rollback_err}")
-        
-        # Method 3: If temporary commit also failed, try getting running config and warn user
-        if not set_config.strip():
-            logging.warning("Temporary commit method also failed, falling back to running config")
-            logging.warning("Note: This will give you the current running config, not your loaded config")
-            try:
-                cli_result = dev.cli("show configuration | display set", warning=False)
-                if cli_result:
-                    set_config = cli_result
-                    logging.info(f"Fallback CLI method returned {len(set_config)} characters")
-                    print(f"Warning: Using running config for {config_filename} - may not reflect your loaded changes")
-            except Exception as fallback_err:
-                logging.error(f"Even fallback method failed: {fallback_err}")
+        except Exception as diff_err:
+            logging.error(f"Error getting or converting diff: {diff_err}")
+            config.rollback()
+            config.unlock()
+            return None
         
         if set_config.strip():
             logging.info("Set configuration found, creating temporary file")

@@ -163,9 +163,24 @@ system {
                 
                 # Rollback to previous state
                 print("Rolling back...")
-                dev.cli("rollback 1")
-                dev.cli("commit")
-                print("✓ Rollback completed")
+                try:
+                    # Method 1: Try using config object rollback
+                    config2 = Config(dev)
+                    config2.lock()
+                    config2.rollback(1)  # rollback 1 generation
+                    config2.commit()
+                    config2.unlock()
+                    print("✓ Rollback completed using config object")
+                except Exception as config_rollback_err:
+                    print(f"Config object rollback failed: {config_rollback_err}")
+                    try:
+                        # Method 2: Try CLI commands
+                        dev.cli("configure")
+                        dev.cli("rollback 1") 
+                        dev.cli("commit and-quit")
+                        print("✓ Rollback completed using CLI")
+                    except Exception as cli_rollback_err:
+                        print(f"CLI rollback also failed: {cli_rollback_err}")
                 
                 # Verify rollback worked
                 current_hostname = dev.cli("show configuration system host-name")
@@ -180,11 +195,20 @@ system {
             print(f"Error in temporary commit test: {e}")
             try:
                 # Emergency rollback
-                dev.cli("rollback 1")
-                dev.cli("commit")
-                print("Emergency rollback attempted")
+                try:
+                    config2 = Config(dev)
+                    config2.lock()
+                    config2.rollback(1)
+                    config2.commit()
+                    config2.unlock()
+                    print("Emergency rollback completed using config object")
+                except:
+                    dev.cli("configure")
+                    dev.cli("rollback 1")
+                    dev.cli("commit and-quit")
+                    print("Emergency rollback completed using CLI")
             except:
-                pass
+                print("Emergency rollback failed")
 
         dev.close()
         print("\n✓ Connection closed")
