@@ -14,13 +14,35 @@ This script connects to Juniper devices, loads configuration files, saves them i
 
 ## Prerequisites
 
-1. Install required Python packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Python 3.6 Compatibility (CentOS 7)
 
-2. Ensure you have network connectivity to your Juniper devices
-3. Have valid credentials for device access
+If you're running Python 3.6 on CentOS 7, you'll need to use specific package versions to avoid compatibility issues:
+
+#### Option 1: Automatic Setup (Recommended)
+```bash
+chmod +x setup_python36.sh
+./setup_python36.sh
+```
+
+#### Option 2: Manual Installation
+```bash
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Python 3.6 compatible versions
+pip install -r requirements.txt
+```
+
+#### Option 3: Check Compatibility
+```bash
+python3 check_compatibility.py
+```
+
+### General Requirements
+1. Network connectivity to your Juniper devices
+2. Valid credentials for device access
+3. SCP enabled on Juniper devices
 
 ## Directory Structure
 
@@ -114,6 +136,44 @@ The script includes comprehensive error handling for:
 - File system errors
 - Configuration loading errors
 - File transfer failures
+
+## Troubleshooting
+
+### Python 3.6 Issues
+
+If you encounter errors like:
+```
+AttributeError: module 'typing' has no attribute 'NoReturn'
+```
+
+This indicates that newer versions of cryptography/PyEZ are being installed that require Python 3.7+. Use the provided `setup_python36.sh` script or manually install the pinned versions in `requirements.txt`.
+
+### Common Solutions:
+
+1. **Clean installation:**
+   ```bash
+   rm -rf venv/
+   ./setup_python36.sh
+   ```
+
+2. **Check your Python version:**
+   ```bash
+   python3 --version
+   python3 check_compatibility.py
+   ```
+
+3. **Verify package versions:**
+   ```bash
+   source venv/bin/activate
+   pip list | grep -E "(cryptography|junos-eznc|paramiko)"
+   ```
+
+### Expected Compatible Versions for Python 3.6:
+- cryptography==3.4.8
+- junos-eznc==2.6.3
+- paramiko==2.11.0
+- lxml==4.6.5
+- ncclient==0.6.13
 
 ## Notes
 

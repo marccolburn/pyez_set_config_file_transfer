@@ -1,7 +1,7 @@
 import csv
 import os
 import tempfile
-from pathlib import Path
+import glob
 from jnpr.junos import Device
 from jnpr.junos.utils.config import Config
 from jnpr.junos.utils.scp import SCP
@@ -52,12 +52,12 @@ def get_config_files(hostname, config_dir):
     Returns:
         list: List of configuration file paths for the hostname
     """
-    host_config_dir = Path(config_dir) / hostname
-    if not host_config_dir.exists():
+    host_config_dir = os.path.join(config_dir, hostname)
+    if not os.path.exists(host_config_dir):
         print(f"Warning: Config directory {host_config_dir} does not exist")
         return []
     
-    config_files = list(host_config_dir.glob("*.config"))
+    config_files = glob.glob(os.path.join(host_config_dir, "*.config"))
     print(f"Found {len(config_files)} config files for {hostname}")
     return config_files
 
@@ -92,13 +92,13 @@ def process_config_file(dev, config_file_path, hostname):
     
     Args:
         dev (Device): Connected Junos device
-        config_file_path (Path): Path to configuration file to load
+        config_file_path (str): Path to configuration file to load
         hostname (str): Device hostname for logging
         
     Returns:
         str: Path to the set format file on device, or None if failed
     """
-    config_filename = config_file_path.name
+    config_filename = os.path.basename(config_file_path)
     set_filename = config_filename.replace('.config', '.set.config')
     remote_set_path = f'/tmp/{set_filename}'
     
@@ -178,12 +178,13 @@ def transfer_file_from_device(dev, remote_path, local_dir, hostname):
     """
     try:
         # Create hostname directory if it doesn't exist
-        host_output_dir = Path(local_dir) / hostname
-        host_output_dir.mkdir(parents=True, exist_ok=True)
+        host_output_dir = os.path.join(local_dir, hostname)
+        if not os.path.exists(host_output_dir):
+            os.makedirs(host_output_dir)
         
         # Extract filename from remote path
-        filename = Path(remote_path).name
-        local_path = host_output_dir / filename
+        filename = os.path.basename(remote_path)
+        local_path = os.path.join(host_output_dir, filename)
         
         print(f"Transferring {remote_path} from {hostname} to {local_path}")
         
@@ -288,7 +289,8 @@ def main():
         return
     
     # Create output directory
-    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
     
     # Process each device
     for device_info in devices:
